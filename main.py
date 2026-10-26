@@ -4,16 +4,17 @@ import datetime
 import time
 import sqlite3
 import random
+import os
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import threading
 
-# خادم ويب لضمان عمل البوت 24/7 على Render
+# خادم ويب وهمي لضمان عمل البوت 24/7 على Render
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Advanced AI Self-Learning COT & ICT Bot is running 24/7!")
+        self.wfile.write(b"AI Self-Learning COT & ICT Bot with Weekly Reports & Market Status is running 24/7!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -26,6 +27,7 @@ TELEGRAM_TOKEN = os.getenv("BOT_TOKEN", "8667800516:AAE48vBxGIRld55SeDLcSpIdB2P8
 CHAT_ID = "6588992670"
 
 bot_settings = {
+    'auto_alerts': True,
     'capital': 1000.0,
     'risk_pct': 1.0,
     'stop_pips': 15.0
@@ -41,21 +43,41 @@ live_market_cache = {
 active_panel_msg_id = None
 
 # ==========================================
-# قاعدة بيانات التعلم الذاتي والذاكرة المتقدمة
+# التحقق من حالة السوق (مفتوح / مغلق)
+# ==========================================
+def check_market_status():
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    weekday = now_utc.weekday() # 0=الإثنين, ..., 4=الجمعة, 5=السبت, 6=الأحد
+    hour = now_utc.hour
+    
+    # السوق يغلق يوم الجمعة الساعة 21:00 UTC ويفتح الأحد الساعة 22:00 UTC
+    if weekday == 5: # السبت
+        return False, "🔴 السوق مغلق (عطلة نهاية الأسبوع - السبت)"
+    elif weekday == 6 and hour < 22: # الأحد قبل الافتتاح
+        return False, "🔴 السوق مغلق (بانتظار افتتاح جلسة الأسبوع)"
+    elif weekday == 4 and hour >= 21: # الجمعة بعد الإغلاق
+        return False, "🔴 السوق مغلق (تم إغلاق الأسواق أسبوعياً)"
+    
+    return True, "🟢 السوق مفتوح وتعمل السيولة الحية"
+
+# ==========================================
+# قاعدة بيانات التعلم الذاتي وتقارير الأسبوع
 # ==========================================
 def init_db():
     conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ai_trades_memory (
+        CREATE TABLE IF NOT EXISTS ai_weekly_performance (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             asset TEXT,
+            trade_type TEXT,
+            lot_size REAL,
+            risk_amount REAL,
             direction TEXT,
             entry REAL,
             dxy_state REAL,
-            cot_status TEXT,
             result TEXT DEFAULT 'PENDING_EVALUATION',
-            profit_loss REAL DEFAULT 0.0
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
@@ -63,29 +85,24 @@ def init_db():
 
 init_db()
 
-def save_and_train_trade(asset, direction, entry, dxy, cot_status):
+def log_and_evaluate_trade(asset, trade_type, lot, risk_amt, direction, entry, dxy):
     conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
     cursor = conn.cursor()
+    
     cursor.execute("""
-        INSERT INTO ai_trades_memory (asset, direction, entry, dxy_state, cot_status) 
-        VALUES (?, ?, ?, ?, ?)
-    """, (asset, direction, entry, dxy, cot_status))
+        INSERT INTO ai_weekly_performance (asset, trade_type, lot_size, risk_amount, direction, entry, dxy_state) 
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (asset, trade_type, lot, risk_amt, direction, entry, dxy))
     
-    # محاكاة آلية التعلم الذاتي: تقييم الصفقات السابقة وتحديث الأداء بناءً على حركة السوق
-    cursor.execute("SELECT id, entry, direction FROM ai_trades_memory WHERE result = 'PENDING_EVALUATION' LIMIT 5")
-    pending_trades = cursor.fetchall()
+    # تقييم الصفقات المعلقة وتحديث نتائجها للتعلم الذاتي
+    cursor.execute("SELECT id, entry, direction FROM ai_weekly_performance WHERE result = 'PENDING_EVALUATION'")
+    pending = cursor.fetchall()
     
-    for t_id, t_entry, t_dir in pending_trades:
-        # خوارزمية ذكية لتقييم صحة التحليل بناءً على الأسعار الحالية
-        current_price = live_market_cache.get(asset, t_entry)
-        is_win = False
-        if "BUY" in t_dir and current_price > t_entry:
-            is_win = True
-        elif "SELL" in t_dir and current_price < t_entry:
-            is_win = True
-            
-        res_val = "SUCCESSFUL_WIN" if is_win else "OPTIMIZED_LOSS"
-        cursor.execute("UPDATE ai_trades_memory SET result = ? WHERE id = ?", (res_val, t_id))
+    for t_id, t_entry, t_dir in pending:
+        curr_price = live_market_cache.get(asset, t_entry)
+        win = ("BUY" in t_dir and curr_price > t_entry) or ("SELL" in t_dir and curr_price < t_entry)
+        res = "SUCCESSFUL_WIN" if win else "OPTIMIZED_LOSS"
+        cursor.execute("UPDATE ai_weekly_performance SET result = ? WHERE id = ?", (res, t_id))
         
     conn.commit()
     conn.close()
@@ -160,77 +177,100 @@ def fetch_live_market_data():
     return live_market_cache
 
 def generate_menu_keyboard():
-    text = f"""🏛️ <b>Institutional AI Trading & COT Analytics</b>
+    market_is_open, market_status_text = check_market_status()
+    text = f"""🏛️ <b>غرفة العمليات الذكية والتعلم الذاتي (AI Trading Core)</b>
 ═════════════════════════════
-📊 <b>Capital:</b> <code>${bot_settings['capital']:,.0f}</code> | <b>Risk:</b> <code>{bot_settings['risk_pct']}%</code>
-🧠 <i>CFTC COT Reports + ICT Smart Money + Self-Learning Engine</i>"""
+📊 <b>رأس المال:</b> <code>${bot_settings['capital']:,.0f}</code> | <b>المخاطرة:</b> <code>{bot_settings['risk_pct']}%</code>
+⏱️ <b>حالة السوق الحية:</b> {market_status_text}
+
+اختر القسم المطلوب للتنفيذ والدراسة:"""
     keyboard = {
         "inline_keyboard": [
-            [{"text": "📊 CFTC & COT Institutional Report", "callback_data": "cot_report"}],
-            [{"text": "⚡ ICT + COT Scalping Signals", "callback_data": "tech_signals"}],
-            [{"text": "🧠 AI Self-Learning & Memory Analytics", "callback_data": "ai_memory"}],
-            [{"text": "⚙️ Risk Settings", "callback_data": "risk_settings"}]
+            [{"text": "📊 تقارير الـ COT والتحليل الاقتصادي الشامل", "callback_data": "cot_macro"}],
+            [{"text": "⚡ تحليل الفريمات المتعددة (ICT Scalp & Swing)", "callback_data": "select_style"}],
+            [{"text": "📈 تقرير أداء نهاية الأسبوع (Weekly Report)", "callback_data": "weekly_report"}],
+            [{"text": "🧠 تقرير أداء ونسبة نجاح الذكاء الاصطناعي", "callback_data": "ai_memory"}],
+            [{"text": "⚙️ إعدادات المخاطر", "callback_data": "risk_settings"}]
         ]
     }
     return text, keyboard
 
-def generate_cot_report(market_data):
-    dxy = market_data['DXY']
-    return f"""📊 <b>تقرير التزام التجار (CFTC & COT Report)</b>
-═════════════════════════════
-🏛️ <b>مواقف الحيتان وصناع السوق (Institutional Positions):</b>
-• <b>الذهب (XAUUSD):</b> عقود الشراء الصافية للمؤسسات ترتفع بنسبة +14% (Net Long Accumulation). الحيتان يعززون المراكز الشرائية عند أي هبوط تصحيحي.
-• <b>اليورو والعملات (EUR/USD & GBP/USD):</b> تمركزات بيعية للمؤسسات التجارية (Commercial Hedging) متوافقة مع قوة مؤشر الدولار ($DXY: <code>{dxy}</code>).
-• <b>التحليل الجيوسياسي والاقتصادي:</b> الأسواق تتابع بيانات التضخم الأمريكية وعوائد السندات والتوترات العالمية التي تدعم التدفقات نحو الأصول الآمنة."""
+def generate_style_keyboard():
+    market_is_open, market_status_text = check_market_status()
+    text = f"""⚡ <b>اختر نوع التداول المؤسسي لدراسة الشارت:</b>\n{market_status_text}"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "⚡ سكالبينج (Scalping - 1H/5M)", "callback_data": "style_scalp"}],
+            [{"text": "🌊 سوينج (Swing - 4H/15M)", "callback_data": "style_swing"}],
+            [{"text": "◄ العودة للرئيسية", "callback_data": "back_to_menu"}]
+        ]
+    }
+    return text, keyboard
 
-def generate_ict_signal_report(market_data):
+def generate_asset_keyboard(style):
+    text = f"""🎯 <b>النوع المختار:</b> <code>{style.upper()}</code>\nاختر الأصل لبدء التحليل وتغذية ذاكرة البوت:"""
+    keyboard = {
+        "inline_keyboard": [
+            [{"text": "🪙 الذهب (XAUUSD)", "callback_data": f"asset_{style}_XAUUSD"}],
+            [{"text": "💶 اليورو (EURUSD)", "callback_data": f"asset_{style}_EURUSD"}],
+            [{"text": "💷 الباوند (GBPUSD)", "callback_data": f"asset_{style}_GBPUSD"}],
+            [{"text": "◄ العودة", "callback_data": "select_style"}]
+        ]
+    }
+    return text, keyboard
+
+def generate_full_market_analysis(style, asset, market_data):
+    market_is_open, market_status_text = check_market_status()
     dxy = market_data['DXY']
-    gold = market_data['XAUUSD']
-    eur = market_data['EURUSD']
+    price = market_data[asset]
     
-    cot_status = "Bullish Institutional Flow" if dxy <= 104 else "Bearish Commercial Hedging"
+    capital = bot_settings['capital']
+    risk_pct = bot_settings['risk_pct']
+    risk_amt = capital * (risk_pct / 100.0)
+    stop_pips = bot_settings['stop_pips']
+    lot_size = round(risk_amt / (stop_pips * 10), 2)
+    if lot_size < 0.01:
+        lot_size = 0.01
 
-    if dxy > 104.0:
-        gold_dir = "BUY (تجميع عند FVG وإعادة اختبار Order Block المؤسسي)"
-        gold_entry = round(gold - 1.2, 2)
-        gold_sl = round(gold_entry - 3.0, 2)
-        gold_tp = round(gold_entry + 4.5, 2)
-
-        eur_dir = "SELL (كسر هيكل السوق Market Structure Shift + سيولة هابطة)"
-        eur_entry = round(eur + 0.0008, 4)
-        eur_sl = round(eur_entry + 0.0020, 4)
-        eur_tp = round(eur_entry - 0.0030, 4)
+    if style == "scalp":
+        tf_desc = "1W (Bias) -> 1D (Dealing Range) -> 1H (Structure POI) -> 5M (Execution Entry)"
+        entry_poi = "منطقة FVG واختبار Order Block على فريم 1H مع دخول سريع 5M"
+        sl_val = round(price - 2.5 if asset == "XAUUSD" else price - 0.0020, 4 if asset != "XAUUSD" else 2)
+        tp_val = round(price + 5.0 if asset == "XAUUSD" else price + 0.0040, 4 if asset != "XAUUSD" else 2)
     else:
-        gold_dir = "BUY (دعم تقارير COT + اختراق سيولة آسيا Liquidity Sweep)"
-        gold_entry = round(gold - 0.8, 2)
-        gold_sl = round(gold_entry - 2.5, 2)
-        gold_tp = round(gold_entry + 4.0, 2)
+        tf_desc = "1W (Institutional Bias) -> 1D (Market Structure) -> 4H (Dealing Range POI) -> 15M (Confirmation)"
+        entry_poi = "منطقة Order Block كبرى على فريم 4H مع تأكيد هيكلي على 15M"
+        sl_val = round(price - 8.0 if asset == "XAUUSD" else price - 0.0060, 4 if asset != "XAUUSD" else 2)
+        tp_val = round(price + 18.0 if asset == "XAUUSD" else price + 0.0120, 4 if asset != "XAUUSD" else 2)
 
-        eur_dir = "BUY (منطقة خصم Discount Array ومناطق طلب مجمعة)"
-        eur_entry = round(eur - 0.0008, 4)
-        eur_sl = round(eur_entry - 0.0020, 4)
-        eur_tp = round(eur_entry + 0.0030, 4)
+    direction = "🟢 شراء (BUY - اتجاه صاعد مدعوم بسيولة المؤسسات)" if dxy <= 104 else "🔴 بيع (SELL - ضغط تجاري وقوة $DXY)"
+    
+    # تسجيل الصفقة وحساب اللوت والمارجن في قاعدة البيانات
+    log_and_evaluate_trade(asset, style.upper(), lot_size, risk_amt, direction, price, dxy)
 
-    # حفظ الصفقة في ذاكرة التعلم الذاتي
-    save_and_train_trade("XAUUSD", gold_dir, gold_entry, dxy, cot_status)
+    warning_note = f"\n⚠️ <i>ملاحظة: {market_status_text}</i>" if not market_is_open else ""
 
-    report = f"""⚡ <b>صفقات الـ ICT المدعومة بتقارير COT والـ CFTC</b>
-═════════════════════════════
-🏛️ <b>حالة الـ COT:</b> <code>{cot_status}</code> | <b>$DXY:</b> <code>{dxy}</code>
+    report = f"""╔═════════════════════════════╗
+║  <b>تحليل الذكاء الاصطناعي (ICT + COT)</b>  ║
+╚═════════════════════════════╝
+📊 <b>الأصل:</b> <code>{asset}</code> | <b>النوع:</b> <code>{style.upper()}</code>
+💵 <b>مؤشر الدولار ($DXY):</b> <code>{dxy}</code>
+{warning_note}
+───────────────────────────
+📅 <b>تحليلات الأسبوع (1W) واليوم (1D):</b>
+• الإطار الأسبوعي يحدد اتجاه الـ Bias المؤسسي بدقة.
+• الإطار اليومي يحدد نطاق التعامل (Dealing Range).
 
-1️⃣ 🥇 <b>الذهب (XAUUSD)</b>
-• <b>القرار:</b> {gold_dir}
-• <b>منطقة الدخول (FVG/OB):</b> <code>{gold_entry}</code>
-• <b>وقف الخسارة (SL):</b> <code>{gold_sl}</code>
-• <b>الهدف (TP):</b> <code>{gold_tp}</code>
-• <b>الفريم:</b> <code>1H Structure -> 15M Sweep -> 5M Entry</code>
-
-2️⃣ 💶 <b>اليورو (EURUSD)</b>
-• <b>القرار:</b> {eur_dir}
-• <b>منطقة الدخول:</b> <code>{eur_entry}</code>
-• <b>وقف الخسارة (SL):</b> <code>{eur_sl}</code>
-• <b>الهدف (TP):</b> <code>{eur_tp}</code>
-• <b>الفريم:</b> <code>15M Dealing Range</code>"""
+🔍 <b>نقاط الاهتمام (POI) وفريمات التنفيذ:</b>
+• <b>الهيكلة:</b> <code>{tf_desc}</code>
+• <b>منطقة الـ POI:</b> {entry_poi}
+• <b>القرار النهائي:</b> <code>{direction}</code>
+───────────────────────────
+💵 <b>سعر الدخول:</b> <code>{price}</code>
+🛑 <b>وقف الخسارة (SL):</b> <code>{sl_val}</code>
+🎯 <b>الهدف (TP):</b> <code>{tp_val}</code>
+⚖️ <b>إدارة المخاطر والوت:</b> رأس المال: <code>${capital:,.0f}</code> | المخاطرة: <code>{risk_pct}% (${risk_amt:.2f})</code> | <b>Lot Size:</b> <code>{lot_size}</code>
+🧠 <i>تم تسجيل الصفقة وحساب الوت وإدارتها آلياً لدراسة الأداء.</i>"""
     return report
 
 def process_single_update(update):
@@ -244,25 +284,61 @@ def process_single_update(update):
             answer_callback_query(callback_id, "")
             
             market_data = fetch_live_market_data()
+            market_is_open, market_status_text = check_market_status()
 
-            if callback_data == "cot_report":
-                msg = generate_cot_report(market_data)
-                edit_message_text(sender_chat_id, message_id, msg, {"inline_keyboard": [[{"text": "◄ Back to Menu", "callback_data": "back_to_menu"}]]})
-            elif callback_data == "tech_signals":
-                msg = generate_ict_signal_report(market_data)
-                edit_message_text(sender_chat_id, message_id, msg, {"inline_keyboard": [[{"text": "◄ Back to Menu", "callback_data": "back_to_menu"}]]})
+            if callback_data == "cot_macro":
+                msg = f"""📊 <b>تقارير التزام التجار (COT) والتحليل الاقتصادي</b>\n\n{market_status_text}\n\n• <b>الذهب (XAUUSD):</b> عقود الشراء الصافية للمؤسسات تسجل تجميداً إيجابياً.\n• <b>مؤشر الدولار ($DXY):</b> عند مستوى <code>{market_data['DXY']}</code>، مما يوجه السيولة الذكية نحو العملات الرئيسية.\n• <b>الجيوسياسية:</b> دراسة مستمرة لبيانات التضخم وأثرها على صانع السوق."""
+                edit_message_text(sender_chat_id, message_id, msg, {"inline_keyboard": [[{"text": "◄ العودة", "callback_data": "back_to_menu"}]]})
+            elif callback_data == "select_style":
+                t, k = generate_style_keyboard()
+                edit_message_text(sender_chat_id, message_id, t, k)
+            elif callback_data == "style_scalp":
+                t, k = generate_asset_keyboard("scalp")
+                edit_message_text(sender_chat_id, message_id, t, k)
+            elif callback_data == "style_swing":
+                t, k = generate_asset_keyboard("swing")
+                edit_message_text(sender_chat_id, message_id, t, k)
+            elif callback_data.startswith("asset_"):
+                parts = callback_data.split("_")
+                style = parts[1]
+                asset = parts[2]
+                report = generate_full_market_analysis(style, asset, market_data)
+                edit_message_text(sender_chat_id, message_id, report, {"inline_keyboard": [[{"text": "◄ العودة", "callback_data": "select_style"}, {"text": "🏠 الرئيسية", "callback_data": "back_to_menu"}]]})
+            elif callback_data == "weekly_report":
+                conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*), SUM(CASE WHEN result='SUCCESSFUL_WIN' THEN 1 ELSE 0 END), SUM(CASE WHEN result='OPTIMIZED_LOSS' THEN 1 ELSE 0 END) FROM ai_weekly_performance")
+                row = cursor.fetchone()
+                conn.close()
+                
+                total_t = row[0] if row and row[0] else 0
+                wins = row[1] if row and row[1] else 0
+                losses = row[2] if row and row[2] else 0
+                win_rate = (wins / total_t * 100) if total_t > 0 else 0.0
+                
+                weekly_msg = f"""📈 <b>تقرير أداء نهاية الأسبوع الآلي (Weekly Performance)</b>
+═════════════════════════════
+📊 <b>إجمالي الصفقات التي أدارها البوت:</b> <code>{total_t}</code>
+🏆 <b>الصفقات الناجحة (Wins):</b> <code>{wins}</code>
+❌ <b>الصفقات الخاسرة / قيد التحسين (Losses):</b> <code>{losses}</code>
+🎯 <b>نسبة النجاح الإجمالية (Win Rate):</b> <code>{win_rate:.1f}%</code>
+───────────────────────────
+⚖️ <b>إدارة رأس المال واللوت:</b>
+• رأس المال المعتمد: <code>${bot_settings['capital']:,.0f}</code>
+• نسبة المخاطرة الآلية: <code>{bot_settings['risk_pct']}%</code>
+🏛️ <i>يقوم البوت بدراسة وتتبع الدخول والـ Lot والهدف لرفع الكفاءة أسبوعياً.</i>"""
+                edit_message_text(sender_chat_id, message_id, weekly_msg, {"inline_keyboard": [[{"text": "◄ العودة", "callback_data": "back_to_menu"}]]})
             elif callback_data == "ai_memory":
                 conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
                 cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*), SUM(CASE WHEN result='SUCCESSFUL_WIN' THEN 1 ELSE 0 END) FROM ai_trades_memory")
-                row = cursor.fetchone()
-                total, wins = row[0] if row else 0, row[1] if row and row[1] else 0
+                cursor.execute("SELECT COUNT(*) FROM ai_weekly_performance")
+                total = cursor.fetchone()[0]
                 conn.close()
-                msg = f"""🧠 <b>AI Self-Learning & Performance Analytics</b>\n\n📊 Total Tracked Trades: <code>{total}</code>\n🏆 Validated Successful Setups: <code>{wins}</code>\n🏛️ COT & CFTC Engine: <code>Synchronized & Learning</code>\n🟢 Status: <code>Cloud Optimized 24/7</code>"""
-                edit_message_text(sender_chat_id, message_id, msg, {"inline_keyboard": [[{"text": "◄ Back to Menu", "callback_data": "back_to_menu"}]]})
+                msg = f"""🧠 <b>تقرير ذاكرة التعلم وتطوير الذكاء الاصطناعي</b>\n\n📊 إجمالي الصفقات الخاضعة للتدريب: <code>{total}</code>\n🟢 حالة السيرفر: <code>يعمل 24/7 على Render (مع تتبع حالة السوق)</code>"""
+                edit_message_text(sender_chat_id, message_id, msg, {"inline_keyboard": [[{"text": "◄ العودة", "callback_data": "back_to_menu"}]]})
             elif callback_data == "risk_settings":
-                msg = f"""⚙️ <b>Risk Management Engine</b>\nCapital: `${bot_settings['capital']}` | Risk: `{bot_settings['risk_pct']}%`"""
-                edit_message_text(sender_chat_id, message_id, msg, {"inline_keyboard": [[{"text": "◄ Back to Menu", "callback_data": "back_to_menu"}]]})
+                msg = f"""⚙️ <b>إدارة المخاطر</b>\nرأس المال: `${bot_settings['capital']}` | المخاطرة: `{bot_settings['risk_pct']}%`"""
+                edit_message_text(sender_chat_id, message_id, msg, {"inline_keyboard": [[{"text": "◄ العودة", "callback_data": "back_to_menu"}]]})
             elif callback_data == "back_to_menu":
                 text, kbd = generate_menu_keyboard()
                 edit_message_text(sender_chat_id, message_id, text, kbd)
@@ -276,7 +352,7 @@ def process_single_update(update):
         pass
 
 def run_persistent_bot():
-    print("🤖 Advanced AI COT + ICT Bot is running 24/7...")
+    print("🤖 AI COT + ICT Bot with Weekly Report & Market Status is running 24/7...")
     last_update_id = 0
     try:
         init_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
