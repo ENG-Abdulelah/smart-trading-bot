@@ -13,7 +13,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Interactive Weekly Strategy & TP/SL Bot is running 24/7!")
+        self.wfile.write(b"Ultimate Production-Ready ICT & Macro Bot is running 24/7!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -31,7 +31,8 @@ bot_settings = {
     'stop_pips': 15.0,
     'auto_dispatch_active': False,
     'preferred_style': 'scalp',
-    'active_weekly_strategy': "FVG Mitigation (تخفيف الفجوات العادلة)"  # الاستراتيجية النشطة حالياً
+    'active_weekly_strategy': "FVG Mitigation (تخفيف الفجوات العادلة)",
+    'selected_auto_asset': 'ALL'
 }
 
 live_market_cache = {
@@ -41,7 +42,6 @@ live_market_cache = {
     'DXY': 104.20
 }
 
-# قائمة الـ 7 استراتيجيات المؤسسية الكبرى
 ICT_STRATEGIES = [
     "FVG Mitigation (تخفيف الفجوات العادلة)",
     "Order Block Rejection (ارتداد مناطق الأوامر)",
@@ -79,7 +79,7 @@ def init_db():
     conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ai_interactive_trades (
+        CREATE TABLE IF NOT EXISTS ai_ultimate_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             asset TEXT,
             trade_type TEXT,
@@ -104,28 +104,57 @@ def log_and_evaluate_trade(asset, trade_type, strategy, lot, risk_amt, direction
     conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO ai_interactive_trades (asset, trade_type, strategy_used, lot_size, risk_amount, direction, entry, sl, tp, dxy_state) 
+        INSERT INTO ai_ultimate_trades (asset, trade_type, strategy_used, lot_size, risk_amount, direction, entry, sl, tp, dxy_state) 
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (asset, trade_type, strategy, lot, risk_amt, direction, entry, sl, tp, dxy))
     
-    cursor.execute("SELECT id, entry, sl, tp, direction FROM ai_interactive_trades WHERE result = 'PENDING_EVALUATION'")
+    cursor.execute("SELECT id, asset, entry, sl, tp, direction FROM ai_ultimate_trades WHERE result = 'PENDING_EVALUATION'")
     pending = cursor.fetchall()
     
-    for t_id, t_entry, t_sl, t_tp, t_dir in pending:
-        curr_price = live_market_cache.get(asset, t_entry)
+    for t_id, t_asset, t_entry, t_sl, t_tp, t_dir in pending:
+        curr_price = live_market_cache.get(t_asset, t_entry)
         if "BUY" in t_dir:
             if curr_price >= t_tp:
-                cursor.execute("UPDATE ai_interactive_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
+                cursor.execute("UPDATE ai_ultimate_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
             elif curr_price <= t_sl:
-                cursor.execute("UPDATE ai_interactive_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
+                cursor.execute("UPDATE ai_ultimate_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
         else:
             if curr_price <= t_tp:
-                cursor.execute("UPDATE ai_interactive_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
+                cursor.execute("UPDATE ai_ultimate_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
             elif curr_price >= t_sl:
-                cursor.execute("UPDATE ai_interactive_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
+                cursor.execute("UPDATE ai_ultimate_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
                 
     conn.commit()
     conn.close()
+
+# دالة حماية وقفل الأصل حتى تنتهي صفوبته السابقة بالـ TP أو الـ SL
+def has_active_trade_for_asset(asset_name):
+    conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, asset, entry, sl, tp, direction FROM ai_ultimate_trades WHERE result = 'PENDING_EVALUATION'")
+    pending = cursor.fetchall()
+    for t_id, t_asset, t_entry, t_sl, t_tp, t_dir in pending:
+        curr_price = live_market_cache.get(t_asset, t_entry)
+        if "BUY" in t_dir:
+            if curr_price >= t_tp:
+                cursor.execute("UPDATE ai_ultimate_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
+            elif curr_price <= t_sl:
+                cursor.execute("UPDATE ai_ultimate_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
+        else:
+            if curr_price <= t_tp:
+                cursor.execute("UPDATE ai_ultimate_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
+            elif curr_price >= t_sl:
+                cursor.execute("UPDATE ai_ultimate_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
+    conn.commit()
+
+    if asset_name == 'ALL':
+        cursor.execute("SELECT COUNT(*) FROM ai_ultimate_trades WHERE result = 'PENDING_EVALUATION'")
+    else:
+        cursor.execute("SELECT COUNT(*) FROM ai_ultimate_trades WHERE asset = ? AND result = 'PENDING_EVALUATION'", (asset_name,))
+    
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count > 0
 
 def send_telegram_message(chat_id, message, reply_markup=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -219,25 +248,35 @@ def fetch_live_market_data():
     return live_market_cache
 
 # ==========================================
-# محرك الخلفية للإرسال التلقائي المستقل
+# محرك الخلفية للإرسال التلقائي مع القفل الذكي
 # ==========================================
 def background_auto_trader():
-    print("🚀 Interactive Strategy Background Engine started...")
+    print("🚀 Ultimate Autonomous Background Engine started...")
     while True:
         try:
             time.sleep(120)
             market_open, _ = check_market_status()
             
             if bot_settings['auto_dispatch_active'] and market_open:
+                chosen_asset_setting = bot_settings['selected_auto_asset']
+                
+                if has_active_trade_for_asset(chosen_asset_setting):
+                    continue
+                
                 market_data = fetch_live_market_data()
                 dxy = market_data['DXY']
                 
-                assets = ["XAUUSD", "EURUSD", "GBPUSD"]
-                chosen_asset = random.choice(assets)
+                if chosen_asset_setting == 'ALL':
+                    assets = ["XAUUSD", "EURUSD", "GBPUSD"]
+                    available_assets = [ast for ast in assets if not has_active_trade_for_asset(ast)]
+                    if not available_assets:
+                        continue
+                    chosen_asset = random.choice(available_assets)
+                else:
+                    chosen_asset = chosen_asset_setting
+                    
                 price = market_data[chosen_asset]
-                
                 style = bot_settings['preferred_style']
-                # استخدام الاستراتيجية النشطة حالياً (التي حددها المستخدم أو الأسبوعية)
                 chosen_strat = bot_settings['active_weekly_strategy']
                 
                 capital = bot_settings['capital']
@@ -261,14 +300,14 @@ def background_auto_trader():
                 
                 auto_msg = f"""🚨 <b>[إرسال صفقة تلقائي بالخلفية (Auto-Dispatcher)]</b>
 ═════════════════════════════
-📊 <b>الأصل:</b> <code>{chosen_asset}</code> | <b>النمط:</b> <code>{style.upper()}</code>
+📊 <b>الأصل المستهدف:</b> <code>{chosen_asset}</code> | <b>النمط:</b> <code>{style.upper()}</code>
 💵 <b>مؤشر الدولار ($DXY):</b> <code>{dxy}</code>
-🔴 <b>الاستراتيجية النشطة المعتمدة:</b> <code>{chosen_strat}</code>
+🔴 <b>الاستراتيجية النشطة:</b> <code>{chosen_strat}</code>
 📍 <b>القرار:</b> <code>{direction}</code>
 ───────────────────────────
 💵 <b>الدخول:</b> <code>{price}</code> | 🛑 <b>SL:</b> <code>{sl_val}</code> | 🎯 <b>TP:</b> <code>{tp_val}</code>
 ⚖️ <b>المخاطرة:</b> رأس المال: <code>${capital:,.2f}</code> | المخاطرة: <code>{risk_pct}%</code> | <b>Lot:</b> <code>{lot_size}</code>
-🧠 <i>تم دمج الاستراتيجية النشطة مع التحليل الاقتصادي وإرسال الصفقة.</i>"""
+🛡️ <i>تم قفل الأصل مؤقتاً ولن يُرسل إشارات جديدة له حتى تحقق الصفقة الهدف (TP) أو الوقف (SL).</i>"""
                 
                 send_telegram_message(CHAT_ID, auto_msg)
         except Exception as e:
@@ -281,12 +320,14 @@ def generate_menu_keyboard():
     dispatch_status = "🟢 مفعل (Active)" if bot_settings['auto_dispatch_active'] else "🔴 متوقف (Off)"
     style_label = "سكالبينج (Scalp)" if bot_settings['preferred_style'] == 'scalp' else "سوينج (Swing)"
     active_strat = bot_settings['active_weekly_strategy']
+    asset_label = "جميع الأزواج (ALL)" if bot_settings['selected_auto_asset'] == 'ALL' else bot_settings['selected_auto_asset']
     
     text = f"""🏛️ <b>غرفة العمليات الذكية (AI Trading Core)</b>
 ═════════════════════════════
 📊 <b>رأس المال:</b> <code>${bot_settings['capital']:,.2f}</code> | <b>المخاطرة:</b> <code>{bot_settings['risk_pct']}%</code>
 🤖 <b>الإرسال التلقائي:</b> {dispatch_status} | <b>النمط:</b> <code>{style_label}</code>
-🔴 <b>الاستراتيجية النشطة حالياً:</b> <code>{active_strat}</code>
+🎯 <b>الأصل المخصص للإرسال:</b> <code>{asset_label}</code>
+🔴 <b>الاستراتيجية النشطة:</b> <code>{active_strat}</code>
 ⏱️ <b>حالة السوق الحية:</b> {market_status_text}
 
 اختر القسم المطلوب:"""
@@ -296,6 +337,7 @@ def generate_menu_keyboard():
             [{"text": "⚡ الطلب اليدوي للتحليل والصفقات (Manual Analysis)", "callback_data": "select_style"}],
             [{"text": "🔄 تبديل حالة الإرسال التلقائي (Auto-Dispatch ON/OFF)", "callback_data": "toggle_dispatch"}],
             [{"text": "🔀 تبديل نمط الإرسال التلقائي (Scalp / Swing)", "callback_data": "change_dispatch_style"}],
+            [{"text": "🎯 تحديد الأزواج للاستقبال التلقائي (Select Asset)", "callback_data": "choose_auto_asset"}],
             [{"text": "📈 تقرير أداء الاستراتيجيات أسبوعياً (مع أزرار التفعيل)", "callback_data": "weekly_report"}],
             [{"text": "⚙️ تعديل رأس المال والمخاطرة (Risk Config)", "callback_data": "risk_config_prompt"}]
         ]
@@ -369,7 +411,7 @@ def generate_full_market_analysis(style, asset, market_data):
 
     dxy = market_data['DXY']
     price = market_data[asset]
-    chosen_strategy = bot_settings['active_weekly_strategy']  # استخدام الاستراتيجية النشطة المحددة
+    chosen_strategy = bot_settings['active_weekly_strategy']
 
     capital = bot_settings['capital']
     risk_pct = bot_settings['risk_pct']
@@ -449,6 +491,23 @@ def process_single_update(update):
                 bot_settings['preferred_style'] = 'swing' if bot_settings['preferred_style'] == 'scalp' else 'scalp'
                 t, k = generate_menu_keyboard()
                 edit_message_text(sender_chat_id, message_id, t, k)
+            elif callback_data == "choose_auto_asset":
+                text_asset = "🎯 <b>اختر الأصل المطلوب للإرسال التلقائي في الخلفية:</b>"
+                kb_asset = {
+                    "inline_keyboard": [
+                        [{"text": "🌐 جميع الأزواج (ALL)", "callback_data": "set_auto_asset_ALL"}],
+                        [{"text": "🪙 الذهب فقط (XAUUSD)", "callback_data": "set_auto_asset_XAUUSD"}],
+                        [{"text": "💶 اليورو فقط (EURUSD)", "callback_data": "set_auto_asset_EURUSD"}],
+                        [{"text": "💷 الباوند فقط (GBPUSD)", "callback_data": "set_auto_asset_GBPUSD"}],
+                        [{"text": "🏠 العودة للقائمة الرئيسية", "callback_data": "back_to_menu"}]
+                    ]
+                }
+                edit_message_text(sender_chat_id, message_id, text_asset, kb_asset)
+            elif callback_data.startswith("set_auto_asset_"):
+                chosen_ast = callback_data.split("_")[3]
+                bot_settings['selected_auto_asset'] = chosen_ast
+                t, k = generate_menu_keyboard()
+                edit_message_text(sender_chat_id, message_id, t, k)
             elif callback_data == "weekly_report":
                 conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
                 cursor = conn.cursor()
@@ -456,7 +515,7 @@ def process_single_update(update):
                     SELECT strategy_used, COUNT(*), 
                            SUM(CASE WHEN result='SUCCESSFUL_WIN' THEN 1 ELSE 0 END),
                            SUM(CASE WHEN result='FAILED_LOSS' THEN 1 ELSE 0 END) 
-                    FROM ai_interactive_trades 
+                    FROM ai_ultimate_trades 
                     GROUP BY strategy_used
                 """)
                 rows = {r[0]: (r[1], r[2] if r[2] else 0, r[3] if r[3] else 0) for r in cursor.fetchall()}
@@ -479,28 +538,25 @@ def process_single_update(update):
                 
                 report_text += "👇 <i>اضغط على أي استراتيجية أدناه لتفعيلها مباشرة كاستراتيجية نشطة (تصبح حمراء):</i>"
                 
-                # بناء أزرار الاستراتيجيات الحمراء التفاعلية أسفل التقرير وبجانب العودة للرئيسية
                 strat_buttons = []
                 for idx, strat in enumerate(ICT_STRATEGIES):
                     prefix = "🔴 " if strat == active_strat else "⚪ "
                     strat_buttons.append([{"text": f"{prefix}{strat[:35]}", "callback_data": f"activate_strat_{idx}"}])
                 
                 strat_buttons.append([{"text": "🏠 العودة للقائمة الرئيسية", "callback_data": "back_to_menu"}])
-                
                 edit_message_text(sender_chat_id, message_id, report_text, {"inline_keyboard": strat_buttons})
             elif callback_data.startswith("activate_strat_"):
                 strat_idx = int(callback_data.split("_")[2])
                 chosen_s = ICT_STRATEGIES[strat_idx]
                 bot_settings['active_weekly_strategy'] = chosen_s
                 
-                # إعادة عرض التقرير المحدث بعد التفعيل
                 conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
                 cursor = conn.cursor()
                 cursor.execute("""
                     SELECT strategy_used, COUNT(*), 
                            SUM(CASE WHEN result='SUCCESSFUL_WIN' THEN 1 ELSE 0 END),
                            SUM(CASE WHEN result='FAILED_LOSS' THEN 1 ELSE 0 END) 
-                    FROM ai_interactive_trades 
+                    FROM ai_ultimate_trades 
                     GROUP BY strategy_used
                 """)
                 rows = {r[0]: (r[1], r[2] if r[2] else 0, r[3] if r[3] else 0) for r in cursor.fetchall()}
@@ -554,7 +610,7 @@ def process_single_update(update):
         pass
 
 def run_persistent_bot():
-    print("🤖 Interactive 7-Strategy Bot is running 24/7...")
+    print("🤖 Ultimate Production-Ready Bot is running 24/7...")
     last_update_id = 0
     try:
         init_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
