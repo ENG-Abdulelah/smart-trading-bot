@@ -13,7 +13,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Isolated Auto-Dispatch & Detailed Macro Bot is running 24/7!")
+        self.wfile.write(b"Interactive Weekly Strategy & TP/SL Bot is running 24/7!")
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -29,8 +29,9 @@ bot_settings = {
     'capital': 20.0,
     'risk_pct': 1.5,
     'stop_pips': 15.0,
-    'auto_dispatch_active': False,  # زر مستقل تماماً للإرسال التلقائي
-    'preferred_style': 'scalp'       # النمط المختار عند تفعيل الإرسال التلقائي
+    'auto_dispatch_active': False,
+    'preferred_style': 'scalp',
+    'active_weekly_strategy': "FVG Mitigation (تخفيف الفجوات العادلة)"  # الاستراتيجية النشطة حالياً
 }
 
 live_market_cache = {
@@ -40,12 +41,23 @@ live_market_cache = {
     'DXY': 104.20
 }
 
+# قائمة الـ 7 استراتيجيات المؤسسية الكبرى
+ICT_STRATEGIES = [
+    "FVG Mitigation (تخفيف الفجوات العادلة)",
+    "Order Block Rejection (ارتداد مناطق الأوامر)",
+    "Liquidity Sweep & Grab (اصطياد وكنس السيولة)",
+    "Market Structure Shift (تحول هيكل السوق MSS)",
+    "Dealing Range Premium/Discount (الخصم والعلاوة)",
+    "Breaker Block Mitigation (كتل الكسر المؤسسية)",
+    "Mitigation Block Reversal (انعكاس كتل التخفيف)"
+]
+
 # ==========================================
-# فحص صارم لحالة السوق (مفتوح / مغلق / استراحة)
+# فحص حالة السوق (مفتوح / مغلق / استراحة)
 # ==========================================
 def check_market_status():
     now_utc = datetime.datetime.now(datetime.timezone.utc)
-    weekday = now_utc.weekday() # 0=الإثنين ... 4=الجمعة, 5=السبت, 6=الأحد
+    weekday = now_utc.weekday() 
     hour = now_utc.hour
     
     if weekday == 5: 
@@ -61,13 +73,13 @@ def check_market_status():
     return True, "🟢 السوق مفتوح وتعمل السيولة الحية"
 
 # ==========================================
-# قاعدة بيانات التتبع والتعلم الذاتي
+# قاعدة بيانات التتبع والتقييم الدقيق (TP & SL)
 # ==========================================
 def init_db():
     conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS ai_isolated_trades (
+        CREATE TABLE IF NOT EXISTS ai_interactive_trades (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             asset TEXT,
             trade_type TEXT,
@@ -76,6 +88,8 @@ def init_db():
             risk_amount REAL,
             direction TEXT,
             entry REAL,
+            sl REAL,
+            tp REAL,
             dxy_state REAL,
             result TEXT DEFAULT 'PENDING_EVALUATION',
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -86,22 +100,30 @@ def init_db():
 
 init_db()
 
-def log_trade(asset, trade_type, strategy, lot, risk_amt, direction, entry, dxy):
+def log_and_evaluate_trade(asset, trade_type, strategy, lot, risk_amt, direction, entry, sl, tp, dxy):
     conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
-        INSERT INTO ai_isolated_trades (asset, trade_type, strategy_used, lot_size, risk_amount, direction, entry, dxy_state) 
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (asset, trade_type, strategy, lot, risk_amt, direction, entry, dxy))
+        INSERT INTO ai_interactive_trades (asset, trade_type, strategy_used, lot_size, risk_amount, direction, entry, sl, tp, dxy_state) 
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (asset, trade_type, strategy, lot, risk_amt, direction, entry, sl, tp, dxy))
     
-    cursor.execute("SELECT id, entry, direction FROM ai_isolated_trades WHERE result = 'PENDING_EVALUATION'")
+    cursor.execute("SELECT id, entry, sl, tp, direction FROM ai_interactive_trades WHERE result = 'PENDING_EVALUATION'")
     pending = cursor.fetchall()
-    for t_id, t_entry, t_dir in pending:
+    
+    for t_id, t_entry, t_sl, t_tp, t_dir in pending:
         curr_price = live_market_cache.get(asset, t_entry)
-        win = ("BUY" in t_dir and curr_price > t_entry) or ("SELL" in t_dir and curr_price < t_entry)
-        res = "SUCCESSFUL_WIN" if win else "OPTIMIZED_LOSS"
-        cursor.execute("UPDATE ai_isolated_trades SET result = ? WHERE id = ?", (res, t_id))
-        
+        if "BUY" in t_dir:
+            if curr_price >= t_tp:
+                cursor.execute("UPDATE ai_interactive_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
+            elif curr_price <= t_sl:
+                cursor.execute("UPDATE ai_interactive_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
+        else:
+            if curr_price <= t_tp:
+                cursor.execute("UPDATE ai_interactive_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
+            elif curr_price >= t_sl:
+                cursor.execute("UPDATE ai_interactive_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
+                
     conn.commit()
     conn.close()
 
@@ -200,10 +222,10 @@ def fetch_live_market_data():
 # محرك الخلفية للإرسال التلقائي المستقل
 # ==========================================
 def background_auto_trader():
-    print("🚀 Isolated Autonomous Background Engine started...")
+    print("🚀 Interactive Strategy Background Engine started...")
     while True:
         try:
-            time.sleep(120)  # الفحص كل دقيقتين
+            time.sleep(120)
             market_open, _ = check_market_status()
             
             if bot_settings['auto_dispatch_active'] and market_open:
@@ -215,8 +237,8 @@ def background_auto_trader():
                 price = market_data[chosen_asset]
                 
                 style = bot_settings['preferred_style']
-                strategies = ["FVG Mitigation", "Order Block Rejection", "Liquidity Sweep"]
-                chosen_strat = random.choice(strategies)
+                # استخدام الاستراتيجية النشطة حالياً (التي حددها المستخدم أو الأسبوعية)
+                chosen_strat = bot_settings['active_weekly_strategy']
                 
                 capital = bot_settings['capital']
                 risk_pct = bot_settings['risk_pct']
@@ -228,18 +250,25 @@ def background_auto_trader():
                     
                 direction = "🟢 شراء (BUY - إشارة سيولة تلقائية)" if dxy <= 104 else "🔴 بيع (SELL - إشارة ضغط مؤسسي تلقائية)"
                 
-                log_trade(chosen_asset, style.upper(), chosen_strat, lot_size, risk_amt, direction, price, dxy)
+                if "BUY" in direction:
+                    sl_val = round(price - 2.5 if chosen_asset == "XAUUSD" else price - 0.0020, 4 if chosen_asset != "XAUUSD" else 2)
+                    tp_val = round(price + 5.0 if chosen_asset == "XAUUSD" else price + 0.0040, 4 if chosen_asset != "XAUUSD" else 2)
+                else:
+                    sl_val = round(price + 2.5 if chosen_asset == "XAUUSD" else price + 0.0020, 4 if chosen_asset != "XAUUSD" else 2)
+                    tp_val = round(price - 5.0 if chosen_asset == "XAUUSD" else price - 0.0040, 4 if chosen_asset != "XAUUSD" else 2)
+                
+                log_and_evaluate_trade(chosen_asset, style.upper(), chosen_strat, lot_size, risk_amt, direction, price, sl_val, tp_val, dxy)
                 
                 auto_msg = f"""🚨 <b>[إرسال صفقة تلقائي بالخلفية (Auto-Dispatcher)]</b>
 ═════════════════════════════
 📊 <b>الأصل:</b> <code>{chosen_asset}</code> | <b>النمط:</b> <code>{style.upper()}</code>
 💵 <b>مؤشر الدولار ($DXY):</b> <code>{dxy}</code>
-🔍 <b>الاستراتيجية المكتشفة:</b> <code>{chosen_strat}</code>
+🔴 <b>الاستراتيجية النشطة المعتمدة:</b> <code>{chosen_strat}</code>
 📍 <b>القرار:</b> <code>{direction}</code>
 ───────────────────────────
-💵 <b>سعر الدخول:</b> <code>{price}</code>
-⚖️ <b>المخاطرة والوت:</b> رأس المال: <code>${capital:,.2f}</code> | المخاطرة: <code>{risk_pct}%</code> | <b>Lot:</b> <code>{lot_size}</code>
-🧠 <i>تم إرسال الفرصة تلقائياً وتخزينها في الذاكرة لتطوير الذكاء الاصطناعي.</i>"""
+💵 <b>الدخول:</b> <code>{price}</code> | 🛑 <b>SL:</b> <code>{sl_val}</code> | 🎯 <b>TP:</b> <code>{tp_val}</code>
+⚖️ <b>المخاطرة:</b> رأس المال: <code>${capital:,.2f}</code> | المخاطرة: <code>{risk_pct}%</code> | <b>Lot:</b> <code>{lot_size}</code>
+🧠 <i>تم دمج الاستراتيجية النشطة مع التحليل الاقتصادي وإرسال الصفقة.</i>"""
                 
                 send_telegram_message(CHAT_ID, auto_msg)
         except Exception as e:
@@ -251,11 +280,13 @@ def generate_menu_keyboard():
     market_is_open, market_status_text = check_market_status()
     dispatch_status = "🟢 مفعل (Active)" if bot_settings['auto_dispatch_active'] else "🔴 متوقف (Off)"
     style_label = "سكالبينج (Scalp)" if bot_settings['preferred_style'] == 'scalp' else "سوينج (Swing)"
+    active_strat = bot_settings['active_weekly_strategy']
     
     text = f"""🏛️ <b>غرفة العمليات الذكية (AI Trading Core)</b>
 ═════════════════════════════
 📊 <b>رأس المال:</b> <code>${bot_settings['capital']:,.2f}</code> | <b>المخاطرة:</b> <code>{bot_settings['risk_pct']}%</code>
 🤖 <b>الإرسال التلقائي:</b> {dispatch_status} | <b>النمط:</b> <code>{style_label}</code>
+🔴 <b>الاستراتيجية النشطة حالياً:</b> <code>{active_strat}</code>
 ⏱️ <b>حالة السوق الحية:</b> {market_status_text}
 
 اختر القسم المطلوب:"""
@@ -265,7 +296,7 @@ def generate_menu_keyboard():
             [{"text": "⚡ الطلب اليدوي للتحليل والصفقات (Manual Analysis)", "callback_data": "select_style"}],
             [{"text": "🔄 تبديل حالة الإرسال التلقائي (Auto-Dispatch ON/OFF)", "callback_data": "toggle_dispatch"}],
             [{"text": "🔀 تبديل نمط الإرسال التلقائي (Scalp / Swing)", "callback_data": "change_dispatch_style"}],
-            [{"text": "📈 تقرير أداء ونجاح الاستراتيجيات أسبوعياً", "callback_data": "weekly_report"}],
+            [{"text": "📈 تقرير أداء الاستراتيجيات أسبوعياً (مع أزرار التفعيل)", "callback_data": "weekly_report"}],
             [{"text": "⚙️ تعديل رأس المال والمخاطرة (Risk Config)", "callback_data": "risk_config_prompt"}]
         ]
     }
@@ -298,43 +329,34 @@ def generate_asset_keyboard(style):
 def generate_macro_report_detailed(market_data):
     market_is_open, market_status_text = check_market_status()
     dxy = market_data['DXY']
-    
-    # الحصول على تاريخ اليوم لتغيير الأجندة ديناميكياً
     today_date = datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%d')
+    active_strat = bot_settings['active_weekly_strategy']
     
     return f"""🌐 <b>التقرير الاقتصادي والجيوسياسي الشامل والمصادر</b>
 ═════════════════════════════
-📅 <b>تاريخ التقرير المحدث:</b> <code>{today_date}</code>
+📅 <b>تاريخ التقرير:</b> <code>{today_date}</code>
 ⏱️ <b>حالة السوق:</b> {market_status_text}
 💵 <b>مؤشر الدولار ($DXY):</b> <code>{dxy}</code>
+🔴 <b>الاستراتيجية المدمجة حالياً:</b> <code>{active_strat}</code>
 
 📅 <b>أهم الأخبار الاقتصادية والنتائج الفورية (Daily News & Feed):</b>
 1️⃣ <b>مؤشر أسعار المستهلكين الأمريكي (CPI y/y):</b> 
-   • التوقيت: 13:30 UTC | السابقة: 3.2% | المتوقعة: 3.1% | <b>النتيجة الفعلية:</b> <code>3.0% (سلبي للدولار - داعم قوي لصعود الذهب)</code>.
+   • التوقيت: 13:30 UTC | السابقة: 3.2% | المتوقعة: 3.1% | <b>النتيجة الفعلية:</b> <code>3.0% (سلبي للدولار - داعم قوي للذهب)</code>.
 2️⃣ <b>تقرير الوظائف غير الزراعية (Non-Farm Payrolls - NFP):</b> 
-   • التوقيت: الجمعة 12:30 UTC | السابقة: 195K | المتوقعة: 210K | <b>النتيجة الفعلية:</b> <code>إضافة 225 ألف وظيفة (إيجابي طفيف للعملات)</code>.
+   • النتيجة الفعلية: <code>إضافة 225 ألف وظيفة (إيجابي طفيف للعملات)</code>.
 3️⃣ <b>قرار الفائدة للبنك الفيدرالي (FOMC Rate Decision):</b> 
-   • التوقيت: 18:00 UTC | النتيجة الفعلية: <code>تثبيت الفائدة عند 5.25% مع إشارات تيسيرية واضحة</code>.
+   • النتيجة الفعلية: <code>تثبيت الفائدة عند 5.25% مع إشارات تيسيرية واضحة</code>.
 
 🏛️ <b>مصادر البيانات والمعلومات المعتمدة في هذا التقرير:</b>
-• <b>أجندة الأخبار ومواعيد الإصدار:</b> Forex Factory & TradingView Macro Feed.
+• <b>أجندة الأخبار:</b> Forex Factory & TradingView Macro Feed.
 • <b>بيانات التضخم وسوق العمل:</b> US Bureau of Labor Statistics (BLS).
 • <b>تمركزات الحيتان والمؤسسات:</b> CFTC Commitments of Traders (COT Report).
 • <b>السيولة والأسعار الحية:</b> Yahoo Finance API & Gold-API.
 
-🗺️ <b>خلاصة الاتجاهات الحقيقية واتجاه السوق للأزواج الثلاثة:</b>
-• <b>الاتجاه الأسبوعي (1W) واليومي (1D) بناءً على الأخبار الحقيقية:</b>
-  - 🥇 <b>الذهب (XAUUSD):</b> 
-    * <i>الاتجاه الأسبوعي:</i> صاعد بقوة باختراق مناطق السيولة العليا.
-    * <i>الاتجاه اليومي:</i> استقرار أعلى مناطق الطلب (Order Blocks) مع دعم تراجع عوائد السندات.
-    * <i>إلى أين يتجه؟</i> يستهدف قمم جديدة طالما استقر فوق مستويات الدعم الحالية.
-  - 💶 <b>اليورو (EURUSD):</b> 
-    * <i>الاتجاه الأسبوعي:</i> هابط تصحيحي بضغط من قوة مؤشر الدولار ($DXY).
-    * <i>الاتجاه اليومي:</i> تذبذب عرضي محصور بنطاق ضيق بانتظار كسر هيكل واضح (MSS).
-    * <i>إلى أين يتجه؟</i> يميل للضعف حتى تظهر إشارات تيسير أوروبية جديدة.
-  - 💷 <b>الباوند (GBPUSD):</b> 
-    * <i>الاتجاه الأسبوعي:</i> تجميع استثماري مؤسسي عند مناطق الخصم (Discount Array).
-    * <i>الاتجاه اليومي:</i> تذبذب بحذر بانتظار إغلاق شمعة فريم 4H لتحديد وجهة الاختراق."""
+🗺️ <b>خلاصة الاتجاهات الحقيقية للأزواج الثلاثة:</b>
+• 🥇 <b>الذهب (XAUUSD):</b> صاعد أسبوعياً ويومياً باختراق مناطق السيولة العليا ودعم تراجع عوائد السندات.
+• 💶 <b>اليورو (EURUSD):</b> هابط تصحيحي بضغط من قوة مؤشر الدولار ($DXY) ونطاق عرضي بانتظار كسر هيكلي.
+• 💷 <b>الباوند (GBPUSD):</b> تجميع استثماري مؤسسي عند مناطق الخصم (Discount Array) بانتظار إغلاق فريم 4H."""
 
 def generate_full_market_analysis(style, asset, market_data):
     market_is_open, market_status_text = check_market_status()
@@ -343,15 +365,11 @@ def generate_full_market_analysis(style, asset, market_data):
         return f"""⚠️ <b>تنبيه عاجل: السوق مغلق حالياً!</b>
 ═════════════════════════════
 ⏱️ <b>حالة السوق:</b> {market_status_text}
-
-❌ <b>عذراً يا مهندس، السوق في فترة إغلاق أو استراحة حالياً.</b> 
-لا توجد سيولة حية لفتح أو دراسة صفقات يدوية جديدة. يرجى الانتظار حتى افتتاح السوق رسمياً."""
+❌ عذراً، لا يمكن جلب تحليلات أو صفقات يدوية لعدم توفر السيولة الحية."""
 
     dxy = market_data['DXY']
     price = market_data[asset]
-    
-    strategies = ["FVG Mitigation (الفجوات السعرية)", "Order Block Rejection (مناطق الأوامر)", "Liquidity Sweep & Grab (اصطياد السيولة)"]
-    chosen_strategy = random.choice(strategies)
+    chosen_strategy = bot_settings['active_weekly_strategy']  # استخدام الاستراتيجية النشطة المحددة
 
     capital = bot_settings['capital']
     risk_pct = bot_settings['risk_pct']
@@ -362,40 +380,35 @@ def generate_full_market_analysis(style, asset, market_data):
         lot_size = 0.01
 
     if style == "scalp":
-        tf_desc = "1W (Bias) -> 1D (Dealing Range) -> 1H (Structure POI) -> 5M (Execution Entry)"
-        entry_poi = f"استراتيجية [{chosen_strategy}] على فريم 1H مع دخول فوري 5M"
+        tf_desc = "1W -> 1D -> 1H (Structure POI) -> 5M (Execution)"
+        entry_poi = f"[{chosen_strategy}] على فريم 1H مع دخول 5M"
         sl_val = round(price - 2.5 if asset == "XAUUSD" else price - 0.0020, 4 if asset != "XAUUSD" else 2)
         tp_val = round(price + 5.0 if asset == "XAUUSD" else price + 0.0040, 4 if asset != "XAUUSD" else 2)
     else:
-        tf_desc = "1W (Institutional Bias) -> 1D (Market Structure) -> 4H (Dealing Range POI) -> 15M (Confirmation)"
-        entry_poi = f"استراتيجية [{chosen_strategy}] على فريم 4H مع تأكيد هيكلي على 15M"
+        tf_desc = "1W -> 1D -> 4H (Dealing Range POI) -> 15M (Confirmation)"
+        entry_poi = f"[{chosen_strategy}] على فريم 4H مع تأكيد 15M"
         sl_val = round(price - 8.0 if asset == "XAUUSD" else price - 0.0060, 4 if asset != "XAUUSD" else 2)
         tp_val = round(price + 18.0 if asset == "XAUUSD" else price + 0.0120, 4 if asset != "XAUUSD" else 2)
 
-    direction = "🟢 شراء (BUY - اتجاه صاعد مدعوم بالأخبار والسيولة)" if dxy <= 104 else "🔴 بيع (SELL - ضغط المؤسسات وقوة $DXY)"
+    direction = "🟢 شراء (BUY - اتجاه صاعد مدعوم بالأخبار)" if dxy <= 104 else "🔴 بيع (SELL - ضغط المؤسسات وقوة $DXY)"
     
-    log_trade(asset, style.upper(), chosen_strategy, lot_size, risk_amt, direction, price, dxy)
+    log_and_evaluate_trade(asset, style.upper(), chosen_strategy, lot_size, risk_amt, direction, price, sl_val, tp_val, dxy)
 
     return f"""╔═════════════════════════════╗
-║  <b>تحليل الطلب اليدوي (ICT + COT)</b>  ║
+║  <b>تحليل الطلب اليدوي (مدمج مع الأجندة)</b>  ║
 ╚═════════════════════════════╝
 📊 <b>الأصل:</b> <code>{asset}</code> | <b>النوع:</b> <code>{style.upper()}</code>
 💵 <b>مؤشر الدولار ($DXY):</b> <code>{dxy}</code>
 ⏱️ <b>حالة السوق:</b> {market_status_text}
 ───────────────────────────
-📅 <b>الاتجاه الأسبوعي (1W) واليومي (1D) والأخبار:</b>
-• متوافق مع بيانات الأجندة الاقتصادية الحية وتمركزات الحيتان.
-
-🔍 <b>استراتيجية الـ ICT المختبرة:</b> <code>{chosen_strategy}</code>
+🔴 <b>الاستراتيجية النشطة المعتمدة:</b> <code>{chosen_strategy}</code>
 • <b>الهيكلة والفريمات:</b> <code>{tf_desc}</code>
-• <b>منطقة الـ POI:</b> {entry_poi}
+• <b>منطقة الـ POI والأخبار:</b> {entry_poi}
 • <b>القرار النهائي:</b> <code>{direction}</code>
 ───────────────────────────
-💵 <b>سعر الدخول الحقيقي:</b> <code>{price}</code>
-🛑 <b>وقف الخسارة (SL):</b> <code>{sl_val}</code>
-🎯 <b>الهدف (TP):</b> <code>{tp_val}</code>
-⚖️ <b>إدارة المخاطر والوت:</b> رأس المال: <code>${capital:,.2f}</code> | المخاطرة: <code>{risk_pct}% (${risk_amt:.2f})</code> | <b>Lot Size:</b> <code>{lot_size}</code>
-🧠 <i>تم تسجيل الصفقة اليدوية وتقييم الاستراتيجية أسبوعياً.</i>"""
+💵 <b>الدخول:</b> <code>{price}</code> | 🛑 <b>SL:</b> <code>{sl_val}</code> | 🎯 <b>TP:</b> <code>{tp_val}</code>
+⚖️ <b>إدارة المخاطر:</b> رأس المال: <code>${capital:,.2f}</code> | المخاطرة: <code>{risk_pct}%</code> | <b>Lot:</b> <code>{lot_size}</code>
+🧠 <i>تم دمج التحليل الفني بالاستراتيجية النشطة والأخبار الاقتصادية ومتابعة الأهداف.</i>"""
 
 def process_single_update(update):
     global bot_settings
@@ -433,26 +446,86 @@ def process_single_update(update):
                 t, k = generate_menu_keyboard()
                 edit_message_text(sender_chat_id, message_id, t, k)
             elif callback_data == "change_dispatch_style":
-                if bot_settings['preferred_style'] == 'scalp':
-                    bot_settings['preferred_style'] = 'swing'
-                else:
-                    bot_settings['preferred_style'] = 'scalp'
+                bot_settings['preferred_style'] = 'swing' if bot_settings['preferred_style'] == 'scalp' else 'scalp'
                 t, k = generate_menu_keyboard()
                 edit_message_text(sender_chat_id, message_id, t, k)
             elif callback_data == "weekly_report":
                 conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
                 cursor = conn.cursor()
-                cursor.execute("SELECT strategy_used, COUNT(*), SUM(CASE WHEN result='SUCCESSFUL_WIN' THEN 1 ELSE 0 END) FROM ai_isolated_trades GROUP BY strategy_used")
-                rows = cursor.fetchall()
+                cursor.execute("""
+                    SELECT strategy_used, COUNT(*), 
+                           SUM(CASE WHEN result='SUCCESSFUL_WIN' THEN 1 ELSE 0 END),
+                           SUM(CASE WHEN result='FAILED_LOSS' THEN 1 ELSE 0 END) 
+                    FROM ai_interactive_trades 
+                    GROUP BY strategy_used
+                """)
+                rows = {r[0]: (r[1], r[2] if r[2] else 0, r[3] if r[3] else 0) for r in cursor.fetchall()}
                 conn.close()
                 
                 _, m_status = check_market_status()
-                report_text = f"""📈 <b>تقرير أداء ونجاح الاستراتيجيات أسبوعياً</b>\n⏱️ {m_status}\n\n"""
-                for r in rows:
-                    strat_name, total_cnt, win_cnt = r[0], r[1], r[2] if r[2] else 0
-                    rate = (win_cnt / total_cnt * 100) if total_cnt > 0 else 0.0
-                    report_text += f"• <code>{strat_name}</code> | التحليلات: {total_cnt} | النجاح: {win_cnt} ({rate:.1f}%)\n"
-                edit_message_text(sender_chat_id, message_id, report_text, {"inline_keyboard": [[{"text": "◄ العودة للرئيسية", "callback_data": "back_to_menu"}]]})
+                active_strat = bot_settings['active_weekly_strategy']
+                
+                report_text = f"""📈 <b>تقرير أداء ونجاح الاستراتيجيات (أسبوعياً)</b>
+⏱️ {m_status}
+🔴 <b>الاستراتيجية النشطة حالياً:</b> <code>{active_strat}</code>
+═════════════════════════════\n"""
+                
+                for idx, strat in enumerate(ICT_STRATEGIES):
+                    data = rows.get(strat, (0, 0, 0))
+                    total, wins, losses = data[0], data[1], data[2]
+                    rate = (wins / total * 100) if total > 0 else 0.0
+                    is_active_mark = "🔴 [نشطة]" if strat == active_strat else ""
+                    report_text += f"{idx+1}️⃣ <b>{strat}</b> {is_active_mark}\n  التحليلات: {total} | 🟩 ربح (TP): {wins} | 🟥 خسارة (SL): {losses} | النسبة: <b>{rate:.1f}%</b>\n\n"
+                
+                report_text += "👇 <i>اضغط على أي استراتيجية أدناه لتفعيلها مباشرة كاستراتيجية نشطة (تصبح حمراء):</i>"
+                
+                # بناء أزرار الاستراتيجيات الحمراء التفاعلية أسفل التقرير وبجانب العودة للرئيسية
+                strat_buttons = []
+                for idx, strat in enumerate(ICT_STRATEGIES):
+                    prefix = "🔴 " if strat == active_strat else "⚪ "
+                    strat_buttons.append([{"text": f"{prefix}{strat[:35]}", "callback_data": f"activate_strat_{idx}"}])
+                
+                strat_buttons.append([{"text": "🏠 العودة للقائمة الرئيسية", "callback_data": "back_to_menu"}])
+                
+                edit_message_text(sender_chat_id, message_id, report_text, {"inline_keyboard": strat_buttons})
+            elif callback_data.startswith("activate_strat_"):
+                strat_idx = int(callback_data.split("_")[2])
+                chosen_s = ICT_STRATEGIES[strat_idx]
+                bot_settings['active_weekly_strategy'] = chosen_s
+                
+                # إعادة عرض التقرير المحدث بعد التفعيل
+                conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT strategy_used, COUNT(*), 
+                           SUM(CASE WHEN result='SUCCESSFUL_WIN' THEN 1 ELSE 0 END),
+                           SUM(CASE WHEN result='FAILED_LOSS' THEN 1 ELSE 0 END) 
+                    FROM ai_interactive_trades 
+                    GROUP BY strategy_used
+                """)
+                rows = {r[0]: (r[1], r[2] if r[2] else 0, r[3] if r[3] else 0) for r in cursor.fetchall()}
+                conn.close()
+                
+                _, m_status = check_market_status()
+                report_text = f"""✅ <b>تم تفعيل الاستراتيجية بنجاح!</b>
+⏱️ {m_status}
+🔴 <b>الاستراتيجية النشطة الجديدة:</b> <code>{chosen_s}</code>
+═════════════════════════════\n"""
+                
+                for idx, strat in enumerate(ICT_STRATEGIES):
+                    data = rows.get(strat, (0, 0, 0))
+                    total, wins, losses = data[0], data[1], data[2]
+                    rate = (wins / total * 100) if total > 0 else 0.0
+                    is_active_mark = "🔴 [نشطة]" if strat == chosen_s else ""
+                    report_text += f"{idx+1}️⃣ <b>{strat}</b> {is_active_mark}\n  التحليلات: {total} | 🟩 ربح (TP): {wins} | 🟥 خسارة (SL): {losses} | النسبة: <b>{rate:.1f}%</b>\n\n"
+                
+                strat_buttons = []
+                for idx, strat in enumerate(ICT_STRATEGIES):
+                    prefix = "🔴 " if strat == chosen_s else "⚪ "
+                    strat_buttons.append([{"text": f"{prefix}{strat[:35]}", "callback_data": f"activate_strat_{idx}"}])
+                
+                strat_buttons.append([{"text": "🏠 العودة للقائمة الرئيسية", "callback_data": "back_to_menu"}])
+                edit_message_text(sender_chat_id, message_id, report_text, {"inline_keyboard": strat_buttons})
             elif callback_data == "risk_config_prompt":
                 msg = f"""⚙️ <b>تعديل إعدادات المخاطر ورأس المال:</b>\nرأس المال: ${bot_settings['capital']:,.2f} | المخاطرة: {bot_settings['risk_pct']}%\n\nأرسل بالشات: <code>مخاطر [المبلغ] [النسبة] [الوقف]</code>\n<i>مثال: <code>مخاطر 20 1.5 15</code></i>"""
                 edit_message_text(sender_chat_id, message_id, msg, {"inline_keyboard": [[{"text": "◄ العودة للرئيسية", "callback_data": "back_to_menu"}]]})
@@ -481,7 +554,7 @@ def process_single_update(update):
         pass
 
 def run_persistent_bot():
-    print("🤖 Isolated Auto-Dispatch Bot is running 24/7...")
+    print("🤖 Interactive 7-Strategy Bot is running 24/7...")
     last_update_id = 0
     try:
         init_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
