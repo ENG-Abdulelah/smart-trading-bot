@@ -560,7 +560,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
     elif update.callback_query:
-        await update.callback_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        edit_message_text(update.callback_query.message.chat_id, update.callback_query.message.message_id, text, reply_markup)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -570,31 +570,31 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "back_to_menu":
         text, kb_dict = generate_menu_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
-        await edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
+        edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
         
     elif data == "toggle_dispatch":
         bot_settings['auto_dispatch_active'] = not bot_settings['auto_dispatch_active']
         text, kb_dict = generate_menu_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
-        await edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
+        edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
 
     elif data == "macro_report":
         market_data = fetch_live_market_data()
         rep_content = generate_macro_report_detailed(market_data)
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")]])
-        await edit_message_text(query.message.chat_id, query.message.message_id, rep_content, keyboard)
+        edit_message_text(query.message.chat_id, query.message.message_id, rep_content, keyboard)
 
     elif data == "select_style":
         text, style_kb = generate_style_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in style_kb['inline_keyboard']])
-        await edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
+        edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
 
     elif data.startswith("manual_style_"):
         style = data.replace("manual_style_", "")
         bot_settings['preferred_style'] = style
         text, asset_kb = generate_asset_keyboard(style)
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in asset_kb['inline_keyboard']])
-        await edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
+        edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
 
     elif data.startswith("manual_asset_"):
         parts = data.split("_")
@@ -603,7 +603,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         market_data = fetch_live_market_data()
         analysis_text = generate_full_market_analysis(style, asset, market_data)
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")]])
-        await edit_message_text(query.message.chat_id, query.message.message_id, analysis_text, keyboard)
+        edit_message_text(query.message.chat_id, query.message.message_id, analysis_text, keyboard)
         
     elif data == "weekly_report":
         conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
@@ -627,7 +627,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard_buttons.append([InlineKeyboardButton(f"{strat} ({status})", callback_data=f"set_strat_{strat[:10]}")])
         keyboard_buttons.append([InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")])
         
-        await edit_message_text(query.message.chat_id, query.message.message_id, rep_text, InlineKeyboardMarkup(keyboard_buttons))
+        edit_message_text(query.message.chat_id, query.message.message_id, rep_text, InlineKeyboardMarkup(keyboard_buttons))
 
     elif data.startswith("set_strat_"):
         prefix = data.replace("set_strat_", "")
@@ -636,7 +636,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text, kb_dict = generate_menu_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
-        await edit_message_text(query.message.chat_id, query.message.message_id, f"✅ تم تفعيل استراتيجية: <b>{matched_strat}</b> بنجاح!\n\n" + text, reply_markup)
+        edit_message_text(query.message.chat_id, query.message.message_id, f"✅ تم تفعيل استراتيجية: <b>{matched_strat}</b> بنجاح!\n\n" + text, reply_markup)
 
     elif data == "choose_auto_asset":
         curr_asset = bot_settings['selected_auto_asset']
@@ -648,7 +648,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("💷 الباوند فقط (GBPUSD)", callback_data="set_sym_GBPUSD")],
             [InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")]
         ]
-        await edit_message_text(query.message.chat_id, query.message.message_id, text, InlineKeyboardMarkup(keyboard))
+        edit_message_text(query.message.chat_id, query.message.message_id, text, InlineKeyboardMarkup(keyboard))
 
     elif data.startswith("set_sym_"):
         new_sym = data.replace("set_sym_", "")
@@ -656,10 +656,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text, kb_dict = generate_menu_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
-        await edit_message_text(query.message.chat_id, query.message.message_id, f"✅ تم تغيير نطاق المراقبة إلى: <b>{new_sym}</b>\n\n" + text, reply_markup)
+        edit_message_text(query.message.chat_id, query.message.message_id, f"✅ تم تغيير نطاق المراقبة إلى: <b>{new_sym}</b>\n\n" + text, reply_markup)
 
 # ==========================================
-# 6. التشغيل الآمن 100% بدون أي تعارض (Main)
+# 6. التشغيل الآمن 100% (Main)
 # ==========================================
 def main():
     if not TELEGRAM_TOKEN:
@@ -671,7 +671,6 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     
     print("🚀 Telegram Bot Polling started successfully...")
-    # استخدام التمرير الآمن وإلغاء إغلاق الـ loop لمنع خطأ Exited with status 1
     application.run_polling(drop_pending_updates=True, close_loop=False)
 
 if __name__ == '__main__':
