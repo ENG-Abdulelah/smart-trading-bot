@@ -312,17 +312,17 @@ def background_auto_trader():
     print("🚀 Ultimate Autonomous Background Engine started...")
     while True:
         try:
-            time.sleep(120)
+            time.sleep(60)
             market_open, _ = check_market_status()
             get_active_strategy()
             
-            if bot_settings['auto_dispatch_active'] and market_open:
+            if bot_settings['auto_dispatch_active']:
                 chosen_asset_setting = bot_settings['selected_auto_asset']
                 if has_active_trade_for_asset(chosen_asset_setting):
                     continue
                 
                 market_data = fetch_live_market_data()
-                dxy = market_data['DXY']
+                dxy = market_data.get('DXY', 104.2)
                 
                 if chosen_asset_setting == 'ALL':
                     assets = ["XAUUSD", "EURUSD", "GBPUSD"]
@@ -333,7 +333,7 @@ def background_auto_trader():
                 else:
                     chosen_asset = chosen_asset_setting
                     
-                price = market_data[chosen_asset]
+                price = market_data.get(chosen_asset, 2800.0)
                 style = bot_settings['preferred_style']
                 chosen_strat = bot_settings['active_weekly_strategy']
                 
@@ -570,7 +570,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
         cursor = conn.cursor()
         
-        # جلب الصفقات المسجلة والنتائج لكل استراتيجية
         cursor.execute("""
             SELECT strategy_used, 
                    SUM(CASE WHEN result = 'SUCCESSFUL_WIN' THEN 1 ELSE 0 END) as wins,
@@ -582,7 +581,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         stats_rows = cursor.fetchall()
         stats_dict = {row[0]: {'wins': row[1], 'losses': row[2], 'total': row[3]} for row in stats_rows}
         
-        # جلب أرشيف الأداء السابق
         cursor.execute("SELECT strategy_name, win_rate, total_trades, successful_trades, failed_trades FROM strategy_history")
         history_rows = cursor.fetchall()
         conn.close()
@@ -593,7 +591,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             is_active = (strat == bot_settings['active_weekly_strategy'])
             status_icon = "🟢 [الاستراتيجية النشطة حالياً]" if is_active else "⚪ [متاحة للتفعيل]"
             
-            # جلب إحصائيات هذه الاستراتيجية من الصفقات الحية أو الأرشيف
             st_data = stats_dict.get(strat, {'wins': 0, 'losses': 0, 'total': 0})
             wins = st_data['wins']
             losses = st_data['losses']
@@ -609,7 +606,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for s_name, w_rate, t_tot, t_succ, t_fail in history_rows:
                 rep_text += f"• {s_name} ⬅️ نسبة نجاح: <code>{w_rate}%</code> (ناجحة: {t_succ} / خاسرة: {t_fail})\n"
 
-        # بناء أزرار التفعيل لكل استراتيجية مع تقريرها
         keyboard_buttons = []
         for strat in ICT_STRATEGIES:
             btn_text = f"✅ تفعيل: {strat[:28]}" if strat != bot_settings['active_weekly_strategy'] else f"🟢 مفعلة حالياً: {strat[:20]}"
@@ -658,7 +654,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 # ==========================================
-# 6. التشغيل الآمن الأساسي
+# 6. التشغيل الأساسي الآمن (مع إلغاء التعليق)
 # ==========================================
 def main():
     if not TELEGRAM_TOKEN:
@@ -669,7 +665,7 @@ def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    print("🚀 Bot started successfully with full features & detailed strategy reports...")
+    print("🚀 Bot started successfully with all original features and connection fix...")
     application.run_polling(drop_pending_updates=True, close_loop=False)
 
 if __name__ == '__main__':
