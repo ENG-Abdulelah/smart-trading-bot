@@ -29,7 +29,7 @@ def run_web_server():
 threading.Thread(target=run_web_server, daemon=True).start()
 
 # ==========================================
-# 2. الثوابت والإعدادات
+# 2. الثوابت وإعدادات النظام
 # ==========================================
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN", "8667800516:AAE48vBxGIRld55SeDLcSpIdB2P8lrrkWbw")
 CHAT_ID = "6588992670"
@@ -62,7 +62,7 @@ live_market_cache = {
 }
 
 # ==========================================
-# 3. قاعدة البيانات والتدوير الأسبوعي والأرشيف
+# 3. قاعدة البيانات، التدوير الأسبوعي والأرشيف
 # ==========================================
 def init_db():
     conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
@@ -234,27 +234,10 @@ def log_and_evaluate_trade(asset, trade_type, strategy, lot, risk_amt, direction
 def has_active_trade_for_asset(asset_name):
     conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, asset, entry, sl, tp, direction FROM ai_ultimate_trades WHERE result = 'PENDING_EVALUATION'")
-    pending = cursor.fetchall()
-    for t_id, t_asset, t_entry, t_sl, t_tp, t_dir in pending:
-        curr_price = live_market_cache.get(t_asset, t_entry)
-        if "BUY" in t_dir:
-            if curr_price >= t_tp:
-                cursor.execute("UPDATE ai_ultimate_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
-            elif curr_price <= t_sl:
-                cursor.execute("UPDATE ai_ultimate_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
-        else:
-            if curr_price <= t_tp:
-                cursor.execute("UPDATE ai_ultimate_trades SET result = 'SUCCESSFUL_WIN' WHERE id = ?", (t_id,))
-            elif curr_price >= t_sl:
-                cursor.execute("UPDATE ai_ultimate_trades SET result = 'FAILED_LOSS' WHERE id = ?", (t_id,))
-    conn.commit()
-
     if asset_name == 'ALL':
         cursor.execute("SELECT COUNT(*) FROM ai_ultimate_trades WHERE result = 'PENDING_EVALUATION'")
     else:
         cursor.execute("SELECT COUNT(*) FROM ai_ultimate_trades WHERE asset = ? AND result = 'PENDING_EVALUATION'", (asset_name,))
-    
     count = cursor.fetchone()[0]
     conn.close()
     return count > 0
@@ -274,33 +257,6 @@ def send_telegram_message(chat_id, message, reply_markup=None):
     except Exception:
         pass
     return None
-
-def edit_message_text(chat_id, message_id, text, reply_markup=None):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/editMessageText"
-    payload = {"chat_id": chat_id, "message_id": message_id, "text": text, "parse_mode": "HTML"}
-    if reply_markup:
-        payload["reply_markup"] = reply_markup
-    try:
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=3) as response:
-            res_data = json.loads(response.read().decode('utf-8'))
-            if res_data.get('ok'):
-                return True
-    except Exception:
-        pass
-    return False
-
-def answer_callback_query(callback_query_id, text="", show_alert=False):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/answerCallbackQuery"
-    payload = {"callback_query_id": callback_query_id, "text": text, "show_alert": show_alert}
-    try:
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-        with urllib.request.urlopen(req, timeout=1) as response:
-            pass
-    except Exception:
-        pass
 
 def fetch_live_market_data():
     global live_market_cache
@@ -360,7 +316,6 @@ def background_auto_trader():
             
             if bot_settings['auto_dispatch_active'] and market_open:
                 chosen_asset_setting = bot_settings['selected_auto_asset']
-                
                 if has_active_trade_for_asset(chosen_asset_setting):
                     continue
                 
@@ -416,7 +371,7 @@ def background_auto_trader():
 threading.Thread(target=background_auto_trader, daemon=True).start()
 
 # ==========================================
-# 5. واجهات وقوائم التيليجرام
+# 5. واجهات وقوائم التيليجرام والأرشيف
 # ==========================================
 def generate_menu_keyboard():
     market_is_open, market_status_text = check_market_status()
@@ -559,42 +514,46 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
     if update.message:
         await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
-    elif update.callback_query:
-        edit_message_text(update.callback_query.message.chat_id, update.callback_query.message.message_id, text, reply_markup)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    answer_callback_query(query.id)
+    await query.answer()
     data = query.data
     
     if data == "back_to_menu":
         text, kb_dict = generate_menu_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
-        edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
+        await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
         
     elif data == "toggle_dispatch":
         bot_settings['auto_dispatch_active'] = not bot_settings['auto_dispatch_active']
         text, kb_dict = generate_menu_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
-        edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
+        await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+
+    elif data == "change_dispatch_style":
+        bot_settings['preferred_style'] = 'swing' if bot_settings['preferred_style'] == 'scalp' else 'scalp'
+        text, kb_dict = generate_menu_keyboard()
+        reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
+        await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
     elif data == "macro_report":
         market_data = fetch_live_market_data()
         rep_content = generate_macro_report_detailed(market_data)
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")]])
-        edit_message_text(query.message.chat_id, query.message.message_id, rep_content, keyboard)
+        await query.message.edit_text(rep_content, reply_markup=keyboard, parse_mode="HTML")
 
     elif data == "select_style":
         text, style_kb = generate_style_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in style_kb['inline_keyboard']])
-        edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
+        await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
     elif data.startswith("manual_style_"):
         style = data.replace("manual_style_", "")
         bot_settings['preferred_style'] = style
         text, asset_kb = generate_asset_keyboard(style)
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in asset_kb['inline_keyboard']])
-        edit_message_text(query.message.chat_id, query.message.message_id, text, reply_markup)
+        await query.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
     elif data.startswith("manual_asset_"):
         parts = data.split("_")
@@ -603,7 +562,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         market_data = fetch_live_market_data()
         analysis_text = generate_full_market_analysis(style, asset, market_data)
         keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")]])
-        edit_message_text(query.message.chat_id, query.message.message_id, analysis_text, keyboard)
+        await query.message.edit_text(analysis_text, reply_markup=keyboard, parse_mode="HTML")
         
     elif data == "weekly_report":
         conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
@@ -627,7 +586,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard_buttons.append([InlineKeyboardButton(f"{strat} ({status})", callback_data=f"set_strat_{strat[:10]}")])
         keyboard_buttons.append([InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")])
         
-        edit_message_text(query.message.chat_id, query.message.message_id, rep_text, InlineKeyboardMarkup(keyboard_buttons))
+        await query.message.edit_text(rep_text, reply_markup=InlineKeyboardMarkup(keyboard_buttons), parse_mode="HTML")
 
     elif data.startswith("set_strat_"):
         prefix = data.replace("set_strat_", "")
@@ -636,7 +595,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text, kb_dict = generate_menu_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
-        edit_message_text(query.message.chat_id, query.message.message_id, f"✅ تم تفعيل استراتيجية: <b>{matched_strat}</b> بنجاح!\n\n" + text, reply_markup)
+        await query.message.edit_text(f"✅ تم تفعيل استراتيجية: <b>{matched_strat}</b> بنجاح!\n\n" + text, reply_markup=reply_markup, parse_mode="HTML")
 
     elif data == "choose_auto_asset":
         curr_asset = bot_settings['selected_auto_asset']
@@ -648,7 +607,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("💷 الباوند فقط (GBPUSD)", callback_data="set_sym_GBPUSD")],
             [InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")]
         ]
-        edit_message_text(query.message.chat_id, query.message.message_id, text, InlineKeyboardMarkup(keyboard))
+        await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
 
     elif data.startswith("set_sym_"):
         new_sym = data.replace("set_sym_", "")
@@ -656,10 +615,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         text, kb_dict = generate_menu_keyboard()
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
-        edit_message_text(query.message.chat_id, query.message.message_id, f"✅ تم تغيير نطاق المراقبة إلى: <b>{new_sym}</b>\n\n" + text, reply_markup)
+        await query.message.edit_text(f"✅ تم تغيير نطاق المراقبة إلى: <b>{new_sym}</b>\n\n" + text, reply_markup=reply_markup, parse_mode="HTML")
+
+    elif data == "risk_config_prompt":
+        text = f"""⚙️ <b>إعدادات رأس المال والمخاطرة الحالية:</b>
+═════════════════════════════
+💰 رأس المال: <code>${bot_settings['capital']:,.2f}</code>
+📉 نسبة المخاطرة: <code>{bot_settings['risk_pct']}%</code>
+🛑 الوقف الافتراضي: <code>{bot_settings['stop_pips']} pips</code>"""
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")]])
+        await query.message.edit_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 # ==========================================
-# 6. التشغيل الآمن 100% (Main)
+# 6. التشغيل الآمن الأساسي
 # ==========================================
 def main():
     if not TELEGRAM_TOKEN:
@@ -670,7 +638,7 @@ def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    print("🚀 Telegram Bot Polling started successfully...")
+    print("🚀 Bot started successfully with full features...")
     application.run_polling(drop_pending_updates=True, close_loop=False)
 
 if __name__ == '__main__':
