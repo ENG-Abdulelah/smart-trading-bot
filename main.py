@@ -10,11 +10,16 @@ import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
+# ==========================================
+# 1. إعداد خادم الويب (Keep-Alive لـ Render)
+# ==========================================
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
         self.wfile.write(b"Ultimate Production-Ready ICT & Macro Bot is running 24/7!")
+    def log_message(self, format, *args):
+        pass # لکتم السجلات الزائدة في الـ Console
 
 def run_web_server():
     port = int(os.environ.get("PORT", 10000))
@@ -23,6 +28,9 @@ def run_web_server():
 
 threading.Thread(target=run_web_server, daemon=True).start()
 
+# ==========================================
+# 2. إعدادات الثوابت والاستراتيجيات
+# ==========================================
 TELEGRAM_TOKEN = os.getenv("BOT_TOKEN", "8667800516:AAE48vBxGIRld55SeDLcSpIdB2P8lrrkWbw")
 CHAT_ID = "6588992670"
 
@@ -53,6 +61,9 @@ live_market_cache = {
     'DXY': 104.20
 }
 
+# ==========================================
+# 3. قاعدة البيانات، التدوير الأسبوعي والأرشيف
+# ==========================================
 def init_db():
     conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
     cursor = conn.cursor()
@@ -173,6 +184,9 @@ def get_monitored_symbol_setting():
 get_active_strategy()
 get_monitored_symbol_setting()
 
+# ==========================================
+# 4. الوظائف والخدمات المساعدة
+# ==========================================
 def check_market_status():
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     weekday = now_utc.weekday() 
@@ -401,6 +415,9 @@ def background_auto_trader():
 
 threading.Thread(target=background_auto_trader, daemon=True).start()
 
+# ==========================================
+# 5. واجهات وقوائم التيليجرام
+# ==========================================
 def generate_menu_keyboard():
     market_is_open, market_status_text = check_market_status()
     dispatch_status = "🟢 مفعل (Active)" if bot_settings['auto_dispatch_active'] else "🔴 متوقف (Off)"
@@ -641,6 +658,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton(btn['text'], callback_data=btn['callback_data']) for btn in row] for row in kb_dict['inline_keyboard']])
         await edit_message_text(query.message.chat_id, query.message.message_id, f"✅ تم تغيير نطاق المراقبة إلى: <b>{new_sym}</b>\n\n" + text, reply_markup)
 
+# ==========================================
+# 6. التشغيل الآمن لمنع خروج المنصة (Status 1)
+# ==========================================
 def main():
     if not TELEGRAM_TOKEN:
         print("❌ Telegram token missing!")
@@ -651,7 +671,11 @@ def main():
     application.add_handler(CallbackQueryHandler(button_handler))
     
     print("🚀 Telegram Bot Polling started successfully...")
-    application.run_polling()
+    try:
+        # استخدام close_loop=False لمنع إغلاق حلقة الأحداث المفاجئ على سيرفرات السحاب
+        application.run_polling(close_loop=False, allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        print(f"Polling crashed: {e}")
 
 if __name__ == '__main__':
     main()
