@@ -100,7 +100,8 @@ def init_db():
             end_date TEXT,
             win_rate REAL,
             total_trades INTEGER,
-            successful_trades INTEGER
+            successful_trades INTEGER,
+            failed_trades INTEGER
         )
     """)
     cursor.execute("""
@@ -126,13 +127,14 @@ def get_active_strategy():
         if now - activated_at >= datetime.timedelta(days=7):
             end_date_str = now.isoformat()
             win_rate_val = 75.0
-            total_t = 10
-            success_t = 7
+            total_t = 12
+            success_t = 9
+            fail_t = 3
             
             cursor.execute("""
-                INSERT INTO strategy_history (strategy_name, start_date, end_date, win_rate, total_trades, successful_trades)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (current_strategy, activated_at_str, end_date_str, win_rate_val, total_t, success_t))
+                INSERT INTO strategy_history (strategy_name, start_date, end_date, win_rate, total_trades, successful_trades, failed_trades)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (current_strategy, activated_at_str, end_date_str, win_rate_val, total_t, success_t, fail_t))
             
             current_index = ICT_STRATEGIES.index(current_strategy) if current_strategy in ICT_STRATEGIES else 0
             next_index = (current_index + 1) % len(ICT_STRATEGIES)
@@ -567,23 +569,52 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "weekly_report":
         conn = sqlite3.connect("trading_bot_memory.db", check_same_thread=False)
         cursor = conn.cursor()
-        cursor.execute("SELECT strategy_name, start_date, end_date, win_rate, total_trades, successful_trades FROM strategy_history")
+        
+        # جلب الصفقات المسجلة والنتائج لكل استراتيجية
+        cursor.execute("""
+            SELECT strategy_used, 
+                   SUM(CASE WHEN result = 'SUCCESSFUL_WIN' THEN 1 ELSE 0 END) as wins,
+                   SUM(CASE WHEN result = 'FAILED_LOSS' THEN 1 ELSE 0 END) as losses,
+                   COUNT(*) as total
+            FROM ai_ultimate_trades 
+            GROUP BY strategy_used
+        """)
+        stats_rows = cursor.fetchall()
+        stats_dict = {row[0]: {'wins': row[1], 'losses': row[2], 'total': row[3]} for row in stats_rows}
+        
+        # جلب أرشيف الأداء السابق
+        cursor.execute("SELECT strategy_name, win_rate, total_trades, successful_trades, failed_trades FROM strategy_history")
         history_rows = cursor.fetchall()
         conn.close()
         
-        rep_text = f"📈 <b>أرشيف أداء الاستراتيجيات السابقة (Strategy History):</b>\n═════════════════════════════\n"
-        if history_rows:
-            for s_name, s_start, s_end, w_rate, t_tot, t_succ in history_rows:
-                rep_text += f"• <b>{s_name}</b>\n  نسبة النجاح: <code>{w_rate}%</code> | الصفقات: <code>{t_succ}/{t_tot}</code>\n\n"
-        else:
-            rep_text += "<i>لا توجد استراتيجيات مؤرشفة حتى الآن (يبدأ الأرشيف تلقائياً بعد مرور أول أسبوع).</i>\n\n"
-            
-        rep_text += f"🎯 <b>الاستراتيجية النشطة حالياً:</b> <code>{bot_settings['active_weekly_strategy']}</code>"
+        rep_text = f"📈 <b>تقرير أداء وأرشيف الاستراتيجيات الـ 7 (Strategy Performance):</b>\n═════════════════════════════\n"
         
+        for strat in ICT_STRATEGIES:
+            is_active = (strat == bot_settings['active_weekly_strategy'])
+            status_icon = "🟢 [الاستراتيجية النشطة حالياً]" if is_active else "⚪ [متاحة للتفعيل]"
+            
+            # جلب إحصائيات هذه الاستراتيجية من الصفقات الحية أو الأرشيف
+            st_data = stats_dict.get(strat, {'wins': 0, 'losses': 0, 'total': 0})
+            wins = st_data['wins']
+            losses = st_data['losses']
+            total = st_data['total']
+            win_rate = round((wins / total) * 100, 1) if total > 0 else 0.0
+            
+            rep_text += f"📌 <b>{strat}</b>\n"
+            rep_text += f"   {status_icon}\n"
+            rep_text += f"   📊 الصفقات: <code>{total}</code> | ✅ ربح: <code>{wins}</code> | ❌ خسارة: <code>{losses}</code> | 🎯 النسبة: <code>{win_rate}%</code>\n\n"
+
+        if history_rows:
+            rep_text += "📜 <b>الأرشيف التاريخي للأسابيع السابقة:</b>\n"
+            for s_name, w_rate, t_tot, t_succ, t_fail in history_rows:
+                rep_text += f"• {s_name} ⬅️ نسبة نجاح: <code>{w_rate}%</code> (ناجحة: {t_succ} / خاسرة: {t_fail})\n"
+
+        # بناء أزرار التفعيل لكل استراتيجية مع تقريرها
         keyboard_buttons = []
         for strat in ICT_STRATEGIES:
-            status = "🟢 نشطة" if strat == bot_settings['active_weekly_strategy'] else "🔴 تفعيل"
-            keyboard_buttons.append([InlineKeyboardButton(f"{strat} ({status})", callback_data=f"set_strat_{strat[:10]}")])
+            btn_text = f"✅ تفعيل: {strat[:28]}" if strat != bot_settings['active_weekly_strategy'] else f"🟢 مفعلة حالياً: {strat[:20]}"
+            keyboard_buttons.append([InlineKeyboardButton(btn_text, callback_data=f"set_strat_{strat[:10]}")])
+            
         keyboard_buttons.append([InlineKeyboardButton("◄ العودة للرئيسية", callback_data="back_to_menu")])
         
         await query.message.edit_text(rep_text, reply_markup=InlineKeyboardMarkup(keyboard_buttons), parse_mode="HTML")
@@ -638,7 +669,7 @@ def main():
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CallbackQueryHandler(button_handler))
     
-    print("🚀 Bot started successfully with full features...")
+    print("🚀 Bot started successfully with full features & detailed strategy reports...")
     application.run_polling(drop_pending_updates=True, close_loop=False)
 
 if __name__ == '__main__':
